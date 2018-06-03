@@ -1,0 +1,241 @@
+from bs4 import BeautifulSoup
+from bs4 import Tag
+import re
+from string import punctuation, digits
+import os
+import pymorphy2
+import pandas as pd
+import numpy as np
+from copy import deepcopy
+import copy
+#import pymorphy2
+
+
+from string import punctuation, digits
+punctuation = set(punctuation + '«»—…“”\n\t' + digits)
+table = str.maketrans({ch: None for ch in punctuation})
+
+import pymorphy2
+import re
+
+
+def tokenize(text):
+    """
+    Функция удаляет все знаки препинания.
+    """
+    text = text.lower()
+    text = re.sub(r'[^\w\s]', '', text).replace('\n', '')
+    text = re.sub(r'[\s]{2,}', ' ', text)
+    return text.split(' ')
+
+
+def if_exists_filled(new_soup, name, tag, create=False):
+    
+    a = new_soup.find(name)
+
+    if not a:
+        
+        if create == True:
+            tag.append(new_soup.new_tag(name))
+            return 'Created'
+        else:
+            return None
+
+    elif a.string != 'None':
+        return 'Filled'
+
+    else:
+        return 'Empty'
+
+
+def create_style(cur_soup, line, tag, type1='style'):
+
+    usg = cur_soup.new_tag('usg', type=type1)
+    usg.string = line
+    tag.append(usg)
+
+
+def create_paradigm(cur_soup, prdgm, line):
+    
+    if_exists_filled(cur_soup, 'paradigm', cur_soup.gramgrp, create=True)
+    
+    if prdgm == True:
+        cur_soup.paradigm.append(', ' + line)
+    else:
+        cur_soup.paradigm.append(line)
+        prdgm = True
+    return prdgm
+
+
+def create_sense_and_style(cur_soup, sense_n, line, tag, type1='style'):
+    sns = cur_soup.new_tag('sense', n=sense_n)
+    create_style(cur_soup, line, sns, type1=type1)
+    tag.append(sns)
+
+
+def gram_info(line, cur_soup, style, sense_n, gr2=False):
+
+    # i
+    # стиль для прилагательных
+    # род существильного
+    # род + что-то у существительного
+    # число существительного и или + что-то типа падежа
+
+    tokens = re.findall('\[(.)\](.*?)\[/.\]', line)
+    prdgm = False
+    fill = 0
+    
+    if tokens:
+        for token in tokens:
+
+            if token[0] == 'u':
+
+                prdgm = create_paradigm(cur_soup, prdgm, token[1])
+                fill += 1
+    
+            elif token[0] == 'i':
+
+                words = token[1].split(' ')
+
+                for word in words:
+
+                    if cur_soup.pos.text == 'С':
+
+                        if word in ('ж.', 'м.', 'ср.'):
+
+                            if_exists_filled(cur_soup, 'gender', cur_soup.gramgrp, create=True)
+                            cur_soup.gender.string = word
+                            fill += 1
+
+                    if word in style:
+    
+                        if gr2 == True:
+                            if if_exists_filled(cur_soup, 'sense', cur_soup.entry) == None:
+                                create_sense_and_style(cur_soup, sense_n, word, cur_soup.entry)
+                                fill += 1
+                                
+                        if if_exists_filled(cur_soup, 'usg', cur_soup.entry) != 'Filled':
+                            create_style(cur_soup, word, cur_soup.entry)
+                            fill += 1
+
+    if cur_soup.pos.text == 'С':
+        line = line.strip("-")
+        tokens = line.split(',')
+        if tokens:
+            if '[' not in tokens[0]:
+                prdgm = create_paradigm(cur_soup, prdgm, tokens[0])
+
+
+    if fill == 0 and gr2 == True:
+        if if_exists_filled(cur_soup, 'sense', cur_soup.entry) == None:
+            create_sense_and_style(cur_soup, sense_n, word, cur_soup.entry,  type1='other')
+        
+                    
+        
+
+
+def write_sense(cur_soup, sense_n, definition, style):
+
+    Def = if_exists_filled(cur_soup, 'sense', cur_soup.entry)
+    
+    if Def == 'Empty':
+        if sns == 1:
+            cur_soup.sense.string = re.sub('\[.*?\]', '', definition)  #definition
+
+    elif Def == None or Def == 'Filled':
+        sens = cur_soup.new_tag('sense', n=sns)
+        df = cur_soup.new_tag('def')
+        txt = cur_soup.new_tag('text')
+        txt.string = re.sub('\[.*?\]', '', definition)
+        df.append(txt)
+        sens.append(df)
+        return sens
+
+
+def write_example(cur_soup, example, senses):
+
+    ct = cur_soup.new_tag('cit')
+
+    for token in re.findall('i\](.+?)\[/i\](.*?)(?:\[|$)', example):
+
+        if token[0] != '':
+            qt = cur_soup.new_tag('quote')
+            qt.string = token[0]
+            ct.append(qt)
+
+        if token[1] != '':
+            scr = cur_soup.new_tag('scr', code='')
+            scr.string = token[1]
+            ct.append(scr)
+
+    senses.append(ct)
+    return senses
+
+
+data = pd.read_csv('test.csv',  sep='\t', na_values= np.nan)
+data = data.fillna(0)
+
+all_ = []
+previous = ''
+xml_n = '<superEntry><metalemma></metalemma><entry><form><orth></orth><inflection></inflection><gramGrp></gramGrp></form></entry></superEntry>'
+sns = 1
+style = ['Зоол.', 'Разг.', 'С.-х.', 'зват.', 'Тех.', 'Радио.', 'Рыб.', 'Устар., теперь ирон', 'Архит.', 'Спец.', 'Сад.', 'перен. Устар.', 'повел.', 'Прост. устар.', 'Лит.', 'Типогр.', 'Тех.', 'Воен.', 'Разг. устар.', 'безл., также без доп. Разг.', 'безл. Прост.', 'прост.', 'Лит.', 'Хим.', 'Устар.', 'безл. Разг.', 'перен.; обычно чего.', 'Обл.', 'зоол.', 'разг.', 'архит.', 'хим.', 'безл.', 'устар.', 'обл.', 'шутл.-ирон.', 'перен.', 'Мат.', 'Физ.']
+other = ['в знач. сущ.', 'с определением.', 'в знач. союза', 'в знач. прил.', 'в знач. сущ.', 'безл. в знач. сказ.', 'в безл. употр.']
+
+
+for i in range(data.shape[0]):
+
+    senses = False
+    
+    lemma = data.loc[i]['Lemma.1']
+    
+    if lemma != previous:
+        
+        previous = lemma
+        
+        if i != 0:
+            all_.append(cur_soup)
+        
+        cur_soup = BeautifulSoup(copy.copy(xml_n), 'lxml')
+        cur_soup.orth.string = lemma #data.loc[i]['Entr']
+        sns = 1
+
+    if if_exists_filled(cur_soup, 'pos', cur_soup.gramgrp, create=True) != 'Filled':
+        cur_soup.pos.string = data.loc[i]['_PoS']
+
+    for col_name in data.columns[(data.loc[i] != 0) == True].tolist():
+
+        if col_name == 'Entr':
+            if_exists_filled(cur_soup, 'stress', cur_soup.entry, create=True)
+            cur_soup.stress.string = data.loc[i]['Entr']
+
+        elif col_name == '(Gr)':
+            gram_info(data.loc[i]['(Gr)'], cur_soup, style, sns)
+
+        elif col_name == '(Gr2)':
+            gram_info(data.loc[i]['(Gr2)'], cur_soup, style, sns, gr2=True)
+
+        elif col_name == '(Def)':
+            definition = data.loc[i]['(Def)']
+            senses = write_sense(cur_soup, sns, definition, style)
+            sns += 1
+
+        elif col_name == '(Ex)':
+            if senses:
+                example = data.loc[i]['(Ex)']
+                senses = write_example(cur_soup, example, senses)
+
+        if senses:
+            cur_soup.entry.append(senses)
+
+
+
+    if i == data.shape[0] - 1:
+        all_.append(cur_soup)
+
+
+for i in all_:
+    print(i)
+    print()
+
+    
